@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
-
 # shellcheck disable=SC2162
 read -p "粘贴地址: " pb
 ss=$(date +%s)
 
 echo '开始抓取页面信息:'
-html=$(curl -s -k "$pb")
-name=$(grep '"og:title"' <<<"$html" | grep -P -o '(?<=content=")[^"]+').ts
-m3u8=$(grep '"preload"' <<<"$html" | grep -P -o '(?<=href=")[^"]+')
-dir=$(echo "$m3u8" | grep -P -o '\d+.m3u8')
+html=$(curl -s -k "${pb/play/video}")
+name=$(grep -P -o '(?<=<title>).+(?=</title>)' <<< "$html").ts
+echo "标题    -> $name"
+m3u8=$(grep -P -o 'http.+m3u8' <<< "$html"|head -n1)
+dir="${m3u8/\/index/}"
+dir="${dir##h*/}"
 mkdir -p "$dir"
 m3="$dir/$dir"
-echo "保存文件名=>$name"
-echo '开始抓取视频列表:'
+echo "临时目录-> $dir"
+echo "索引文件-> $m3"
+echo "一级索引-> $m3u8"
 curl -s -k "$m3u8" >"$m3"
+host="$(cut -d'/' -f1,2,3 <<< "$m3u8")"
+m3u8="$host"$(grep -P -o '.+m3u8' < "$m3"|head -n1)
+echo "二级索引-> $m3u8"
+curl -s -k "$m3u8" >"$m3"
+files=$(grep -P -o '^[^#]+ts' "$m3")
 
 THREAD=3
 echo "开始下载视频=线程数=>$THREAD,线程过多服务器会限制导致抓取失败！！"
@@ -36,6 +43,9 @@ function displaytime() {
   printf '%2ds' $S
 }
 
+max=$(wc -l <<<"$files")
+echo "文件数  -> $max"
+
 files=$(grep -P -o '^[^#]+ts' "$m3")
 max=$(wc -l <<<"$files")
 i=0
@@ -44,12 +54,19 @@ for f in $files; do
   i=$((i + 1))
   {
     bn=$(date +%s%N)
-    curl -s -k "$(sed -r "s/$dir/$f/" <<<"$m3u8")" >"$dir/$f"
+    url="$host$f"
+    f=$(basename "$f")
+    curl -s -k "$url" >"$dir/$f"
     un=$(($(date +%s%N) - bn))
     rn=$(((max - i) * un / THREAD))
     bc=$(wc -c <"$dir/$f")
     bs=$((bc * 1000000000 / un))
-    printf "$i/$max($(numfmt --to=iec <<<$bc))\t$((100 * i / max))%%\t下载速度$(numfmt --to=iec <<<$bs)/s *${THREAD}\t剩余时间:$(displaytime $((rn / 1000000000)))\r"
+    fraction="$i/$max($(numfmt --to=iec <<<$bc))"
+    rate="$((100 * i / max))%"
+    speed="$(numfmt --to=iec <<<$bs)/s *${THREAD}"
+    use_time="$(displaytime $(($(date +%s) - ss)))"
+    remain="$(displaytime $((rn / 1000000000)))"
+    printf "  %-20s%-5s%-12s已用时:%-15s剩余估算:%-15s\r" "$fraction" "$rate" "$speed" "$use_time" "$remain"
     echo "" >&5 #任务执行完后在fd5中写入一个占位符
   } &
 done
@@ -59,8 +76,9 @@ exec 5>&- #关闭fd5的管道
 echo
 
 decrypt=$(grep '#EXT-X-KEY' "$m3")
-key_url=$(grep -P -o '(?<=URI\=")[^"]+' <<<"$decrypt")
+key_url="$host"$(grep -P -o '(?<=URI\=")[^"]+' <<<"$decrypt")
 vector=$(grep -P -o '(?<=IV\=0x)\w+' <<<"$decrypt")
+vector=${vector:-00000000000000000000000000000000} #If variable not set or null, use default.
 method=$(grep -P -o '(?<=METHOD\=)[^,]+' <<<"$decrypt")
 
 if [ -n "$decrypt" ]; then
@@ -71,14 +89,16 @@ if [ -n "$decrypt" ]; then
     echo 'initialisation vector:'
     echo "$vector"
     echo "下载key:$key_url"
-    key="$(curl -s -k "$(sed -r "s/$dir/$key_url/" <<<"$m3u8")" | xxd -plain)"
+    key="$(curl -s -k "$key_url" | xxd -plain)"
     echo "$key"
     echo '开始解密+合并:'
     i=0
     for f in $files; do
+      f=$(basename "$f")
       openssl aes-128-cbc -d -in "$dir/$f" -out "$f" -nosalt -iv "$vector" -K "$key"
       cat "$f" >>"$name"
       rm "$f" "$dir/$f"
+      i=$((i + 1))
       echo -en "$i/$max($((100 * i / max))%)\r"
     done
     echo
@@ -90,6 +110,7 @@ if [ -n "$decrypt" ]; then
 else
   echo '文件有加密没有加密:开始合成'
   for f in $files; do
+    f=$(basename "$f")
     cat "$dir/$f" >>"$name"
     rm "$dir/$f"
   done
