@@ -65,3 +65,4 @@ find "$dir" -name "*.ts" | sort -V | xargs cat >>"$name".ts
 rm -r "$dir"
 echo "总耗时:$(displaytime $(($(date +%s) - ss)))"
 exit 0
+

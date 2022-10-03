@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2162
+pb=$1
+if [ -z "$pb" ]; then
+  read -p "粘贴地址: " pb
+fi
+ss=$(date +%s)
+pb="http${pb#*http}"
+echo '开始抓取页面信息:'
+html=$(curl -s -k "${pb}")
+[[ $html == *Cloudflare* ]] && html=$(cloudflare "$pb")
+name=$(grep -P -o '(?<=<title>).+(?=</title>)' <<< "$html")
+echo "标题    -> $name"
+
+m3u8=$(grep -P -o '(?<="|'"'"')http\S+m3u8\S*?(?=["|'"'"'])' <<< "$html"|head -n1|recode html..ascii)
+m3u8=${m3u8//\\\///}
+echo "m3u8    -> $m3u8"
+if [ -z "$m3u8" ]; then
+  echo '未找到m3u8连接地址'
+  exit 1
+fi
+./m3u8.sh $m3u8 "$name"
+

@@ -4,7 +4,12 @@ if [ -z "$pb" ]; then
   read -p "粘贴地址: " pb
 fi
 referer=$pb
-page_id=${pb##*/}
+if [[ "$referer" == *.html ]]; then
+  redirect=$(curl -s -k -i "$referer"|grep -P -o 'location: [/\w]+')
+  referer=$(cut -d'/' -f1,2,3 <<< "$referer")${redirect##*: }
+  referer=${referer%$'\n'}
+fi
+page_id=${referer##*/}
 echo "page_id= $page_id"
 url="https://www.77file.com/down/${page_id}.html"
 cmd="curl -s -k $url -H 'referer: $referer'"
@@ -23,6 +28,7 @@ file=${2}.rar
 if [ -z "$2" ]; then
   file=${url##*/}
 fi
-cmd="curl -k $url -H 'cookie: $cookie' -o '$file'"
+#cmd="curl -k $url -H 'cookie: $cookie' -o '$file'"
+cmd="aria2c --header='cookie: $cookie' -c --check-certificate=false --retry-wait=3 --max-tries=50 --max-connection-per-server=3  '$url' -o '$file'"
 echo "开始下载=> $cmd"
 eval "$cmd"
